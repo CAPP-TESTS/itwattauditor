@@ -144,6 +144,7 @@ export const verifyAttestation = async (
   x509Chain: X509Certificate[],
   options: AttestationVerificationOptions
 ): Promise<VerifiedAttestation> => {
+  rejectSoftwareAttestation(x509Chain);
   validateIssuance(
     x509Chain,
     options.rootPublicKeys ?? getGoogleRootPublicKeys(),
@@ -163,6 +164,34 @@ export const verifyAttestation = async (
     attestKeyPublicKey: attestKey?.certificate.publicKey,
     attestKeyRecord: attestKey?.record,
   };
+};
+
+/**
+ * Public key (base64 SPKI) of the AOSP software attestation root ("Android Keystore Software Attestation
+ * Root"), used by the software Keymaster implementations and by devices without the Google attestation
+ * keys, e.g. the Huawei devices without GMS. Its private key is published in the AOSP sources, so these
+ * chains can be forged and prove nothing.
+ */
+const AOSP_SOFTWARE_ROOT_EC_KEY =
+  'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7l1ex+HA220Dpn7mthvsTWpdamguD/9/SQ59dx9EIm29sa/6FsvHrcV30lacqrewLVQBXT5DKyqO107sSHVBpA==';
+const SOFTWARE_ROOT_SUBJECT = /CN=Android Keystore Software Attestation (Root|Intermediate)/;
+
+/**
+ * Rejects the chains signed with the AOSP software attestation key, with an explicit reason.
+ * @throws {AttestationPolicyError} - If the chain is a software attestation.
+ */
+const rejectSoftwareAttestation = (x509Chain: X509Certificate[]) => {
+  const isSoftware = x509Chain.some(
+    (c) =>
+      SOFTWARE_ROOT_SUBJECT.test(c.subject) ||
+      toSpki(c.publicKey).toString('base64') === AOSP_SOFTWARE_ROOT_EC_KEY
+  );
+  if (isSoftware) {
+    throw new AttestationPolicyError(
+      'Software attestation: the chain is signed with the public AOSP software attestation key, ' +
+        'it provides no hardware guarantee (e.g. a device without the Google attestation keys)'
+    );
+  }
 };
 
 const toSpki = (key: crypto.KeyObject) =>

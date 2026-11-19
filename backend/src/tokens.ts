@@ -72,6 +72,11 @@ export type RegistrationClaims = {
   verifiedBootState: number;
   verifiedBootKey: string;
   os: string;
+  /**
+   * The integrity proof accepted at registration, which the assertions must provide as well: the key
+   * attestation (default) or, for the Huawei devices without GMS, the HMS SysIntegrity result.
+   */
+  method?: 'key_attestation' | 'huawei_sysintegrity';
   /** Registration time in seconds. */
   iat: number;
 };

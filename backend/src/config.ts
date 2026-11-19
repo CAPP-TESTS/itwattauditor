@@ -13,6 +13,12 @@ export type Config = {
   signatureDigests: string[];
   /** Validity of the challenges in seconds. */
   challengeTtlSeconds: number;
+  /**
+   * Whether the Huawei devices without Google Mobile Services can be registered with an HMS Safety Detect
+   * SysIntegrity result, see huaweiSysIntegrity.ts. Disabled by default: it is a policy choice to trust
+   * a verdict of the Huawei SysIntegrity service.
+   */
+  huaweiSysIntegrity: boolean;
 };
 
 export const DEFAULT_PACKAGE_NAME = 'it.capptests.itwattauditor';
@@ -55,6 +61,7 @@ export const getConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
       digest.replace(/:/g, '').toLowerCase()
     ),
     challengeTtlSeconds: Number(env.CHALLENGE_TTL_SECONDS) || 300,
+    huaweiSysIntegrity: env.HUAWEI_SYSINTEGRITY === 'true',
   };
 };
 
