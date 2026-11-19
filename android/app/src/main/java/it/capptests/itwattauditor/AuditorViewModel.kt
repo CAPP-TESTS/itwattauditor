@@ -27,6 +27,7 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
 
     private val prefs = application.getSharedPreferences("settings", Context.MODE_PRIVATE)
     val engine = AttestationEngine(application)
+    val huawei = HuaweiSysIntegrity(application)
     val records = RecordStore(application)
 
     var serverUrl by mutableStateOf(prefs.getString(KEY_SERVER_URL, null) ?: BuildConfig.DEFAULT_SERVER_URL)
@@ -43,6 +44,16 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
         private set
     var recordCount by mutableStateOf(records.list().size)
         private set
+    var sysIntegrityApi by mutableStateOf(
+        HuaweiSysIntegrity.Api.entries.firstOrNull { it.name == prefs.getString(KEY_SYSINTEGRITY_API, null) }
+            ?: HuaweiSysIntegrity.Api.REQUEST
+    )
+        private set
+
+    fun updateSysIntegrityApi(api: HuaweiSysIntegrity.Api) {
+        sysIntegrityApi = api
+        prefs.edit().putString(KEY_SYSINTEGRITY_API, api.name).apply()
+    }
 
     fun updateServerUrl(value: String) {
         serverUrl = value
@@ -57,14 +68,20 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
         val request = JSONObject()
             .put("challenge", challenge)
             .put("certificates", JSONArray(certificates))
+        // Huawei devices without GMS: SysIntegrity bound to the challenge and to the hardware key,
+        // nonce = SHA-256(challenge || SubjectPublicKeyInfo of the hardware key)
+        val sysIntegrity = sysIntegrity(
+            sha256(challenge.toByteArray(Charsets.UTF_8) + attestation.chain.first().publicKey.encoded)
+        )
+        sysIntegrity.jws?.let { request.put("sysIntegrity", it) }
         val response = client.post("/api/register", request)
         val ok = response.status == 200 && response.body.optBoolean("ok")
         if (ok) {
             registration = response.body.getString("registration")
             prefs.edit().putString(KEY_REGISTRATION, registration).apply()
         }
-        save("register", challenge, certificates, attestation, request, response)
-        ok to summary(attestation, response)
+        save("register", challenge, certificates, attestation, request, response, sysIntegrity)
+        ok to summary(attestation, response, sysIntegrity)
     }
 
     fun assert() = run("Assertion (hardware key attestation fallback)") {
@@ -86,9 +103,12 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
             .put("clientData", clientData)
             .put("signature", signature)
             .put("certificates", JSONArray(certificates))
+        // Huawei devices without GMS: SysIntegrity bound to the client data, nonce = SHA-256(client data)
+        val sysIntegrity = sysIntegrity(sha256(clientData.toByteArray(Charsets.UTF_8)))
+        sysIntegrity.jws?.let { request.put("sysIntegrity", it) }
         val response = client.post("/api/assert", request)
-        save("assert", requestHash, certificates, attestation, request, response)
-        (response.status == 200 && response.body.optBoolean("ok")) to summary(attestation, response)
+        save("assert", requestHash, certificates, attestation, request, response, sysIntegrity)
+        (response.status == 200 && response.body.optBoolean("ok")) to summary(attestation, response, sysIntegrity)
     }
 
     fun localAttestation() = run("Local attestation (no backend)") {
@@ -101,10 +121,11 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
             engine.generateRegistration(challenge).also { engine.reset() }
         }
         val certificates = StepRecord.encodeChain(attestation.chain)
-        save("local", challenge, certificates, attestation, null, null)
+        val sysIntegrity = sysIntegrity(sha256(challenge.toByteArray(Charsets.UTF_8)))
+        save("local", challenge, certificates, attestation, null, null, sysIntegrity)
         true to JSONObject()
             .put("challenge", challenge)
-            .put("details", details(attestation))
+            .put("details", details(attestation, sysIntegrity))
             .put("note", "Not verified: export the ZIP to inspect the chain")
             .toString(2)
     }
@@ -117,7 +138,7 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
         true to "Keys, registration and recorded chains deleted"
     }
 
-    fun deviceInfo(): JSONObject = ChainExporter.deviceInfo(engine)
+    fun deviceInfo(): JSONObject = ChainExporter.deviceInfo(engine, huawei)
 
     private fun fetchChallenge(client: BackendClient): String {
         val response = client.get("/api/challenge")
@@ -125,11 +146,39 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
             ?: error("Challenge request failed (HTTP ${response.status}): ${response.body.optString("error")}")
     }
 
-    private fun details(attestation: AttestationEngine.Attestation) = JSONObject()
+    /**
+     * Result of the optional Huawei SysIntegrity check: the JWS or the reason why it is not available.
+     */
+    data class SysIntegrityResult(val jws: String?, val api: HuaweiSysIntegrity.Api?, val error: String?)
+
+    /**
+     * Requests a SysIntegrity result when HMS Core is available and the App ID is configured, never fails.
+     */
+    private suspend fun sysIntegrity(nonce: ByteArray): SysIntegrityResult = when {
+        !huawei.isConfigured() -> SysIntegrityResult(null, null, "Huawei App ID not configured")
+        !huawei.isHmsCoreAvailable() -> SysIntegrityResult(null, null, "HMS Core not available")
+        else -> try {
+            SysIntegrityResult(huawei.check(nonce, sysIntegrityApi), sysIntegrityApi, null)
+        } catch (e: Exception) {
+            SysIntegrityResult(null, sysIntegrityApi, e.message)
+        }
+    }
+
+    private fun details(
+        attestation: AttestationEngine.Attestation,
+        sysIntegrity: SysIntegrityResult? = null,
+    ) = JSONObject()
         .put("usedAttestKey", attestation.usedAttestKey)
         .put("strongBox", attestation.strongBox)
         .put("fallbackReason", attestation.fallbackReason ?: JSONObject.NULL)
         .put("certificates", attestation.chain.size)
+        .apply {
+            if (sysIntegrity != null) {
+                put("sysIntegrity", sysIntegrity.jws ?: JSONObject.NULL)
+                put("sysIntegrityApi", sysIntegrity.api?.label ?: JSONObject.NULL)
+                put("sysIntegrityError", sysIntegrity.error ?: JSONObject.NULL)
+            }
+        }
 
     private fun save(
         type: String,
@@ -138,6 +187,7 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
         attestation: AttestationEngine.Attestation,
         request: JSONObject?,
         response: BackendClient.Response?,
+        sysIntegrity: SysIntegrityResult? = null,
     ) {
         records.add(
             StepRecord(
@@ -146,7 +196,7 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
                 createdAt = RecordStore.now(),
                 challenge = challenge,
                 chain = certificates,
-                details = details(attestation),
+                details = details(attestation, sysIntegrity),
                 request = request,
                 response = response?.body,
                 httpStatus = response?.status,
@@ -154,10 +204,14 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
         )
     }
 
-    private fun summary(attestation: AttestationEngine.Attestation, response: BackendClient.Response) =
+    private fun summary(
+        attestation: AttestationEngine.Attestation,
+        response: BackendClient.Response,
+        sysIntegrity: SysIntegrityResult,
+    ) =
         JSONObject()
             .put("httpStatus", response.status)
-            .put("device", details(attestation))
+            .put("device", details(attestation, sysIntegrity).also { it.remove("sysIntegrity") })
             .put("backend", response.body.also { it.remove("registration") })
             .toString(2)
 
@@ -183,5 +237,9 @@ class AuditorViewModel(application: Application) : AndroidViewModel(application)
     companion object {
         private const val KEY_SERVER_URL = "serverUrl"
         private const val KEY_REGISTRATION = "registration"
+        private const val KEY_SYSINTEGRITY_API = "sysIntegrityApi"
+
+        private fun sha256(data: ByteArray): ByteArray =
+            java.security.MessageDigest.getInstance("SHA-256").digest(data)
     }
 }

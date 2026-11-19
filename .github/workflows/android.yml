@@ -23,6 +23,8 @@ jobs:
     env:
       HAS_KEYSTORE: ${{ secrets.ITWATT_KEYSTORE_BASE64 != '' }}
       SERVER_URL: ${{ inputs.server_url }}
+      # AppGallery Connect App ID for the HMS SysIntegrity check (repository variable, optional)
+      ITWATT_HUAWEI_APP_ID: ${{ vars.ITWATT_HUAWEI_APP_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4

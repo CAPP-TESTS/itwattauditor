@@ -34,6 +34,10 @@ class ChainExporter(private val context: Context) {
                     zip.entry("$folder/cert_$index.der", Base64.decode(certificate, Base64.DEFAULT))
                 }
                 zip.entry("$folder/chain.pem", toPem(record.chain).toByteArray())
+                record.details.optString("sysIntegrity").takeIf { it.isNotEmpty() && it != "null" }?.let { jws ->
+                    zip.entry("$folder/sysintegrity.jws", jws.toByteArray())
+                    decodeJws(jws)?.let { zip.entry("$folder/sysintegrity.json", it.toString(2).toByteArray()) }
+                }
                 zip.entry("$folder/step.json", record.toJson().toString(2).toByteArray())
             }
         }
@@ -67,6 +71,8 @@ an integrity assertion with a fresh key attestation (assert) or a local attestat
   app attest key, cert_1 is the attest key certificate.
 - chain.pem: the same chain in PEM format, e.g. for openssl or the Android key attestation verifier.
 - step.json: the challenge, the details, the request sent and the response of the backend.
+- sysintegrity.jws / sysintegrity.json: the HMS SysIntegrity result (Huawei devices with HMS Core)
+  and its decoded header and payload, not verified.
 device.json describes the device, the OS and the app signing certificate digests.
 """
 
@@ -88,7 +94,19 @@ device.json describes the device, the OS and the app signing certificate digests
         /**
          * Device, OS and app details for the export and the reports, without hardware identifiers.
          */
-        fun deviceInfo(engine: AttestationEngine): JSONObject {
+        /**
+         * Decodes the header and the payload of a JWS, without verifying it.
+         */
+        fun decodeJws(jws: String): JSONObject? = try {
+            val (header, payload) = jws.split(".").map {
+                String(Base64.decode(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), Charsets.UTF_8)
+            }
+            JSONObject().put("header", JSONObject(header)).put("payload", JSONObject(payload))
+        } catch (e: Exception) {
+            null
+        }
+
+        fun deviceInfo(engine: AttestationEngine, huawei: HuaweiSysIntegrity): JSONObject {
             val capabilities = engine.capabilities()
             return JSONObject()
                 .put("manufacturer", Build.MANUFACTURER)
@@ -106,6 +124,8 @@ device.json describes the device, the OS and the app signing certificate digests
                 .put("strongBox", capabilities.hasStrongBox)
                 .put("appVersion", BuildConfig.VERSION_NAME)
                 .put("appSigningCertificateDigests", JSONArray(engine.signingCertificateDigests()))
+                .put("hmsCoreAvailable", huawei.isHmsCoreAvailable())
+                .put("huaweiAppIdConfigured", huawei.isConfigured())
         }
     }
 }

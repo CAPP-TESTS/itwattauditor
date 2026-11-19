@@ -21,6 +21,11 @@
             </intent-filter>
         </activity>
 
+        <!-- AppGallery Connect App ID of the HMS Core SDKs, as set by the AppGallery Connect plugin -->
+        <meta-data
+            android:name="com.huawei.hms.client.appid"
+            android:value="appid=${huaweiAppId}" />
+
         <!-- Shares the exported ZIP files with other apps -->
         <provider
             android:name="androidx.core.content.FileProvider"

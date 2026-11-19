@@ -27,6 +27,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +35,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -105,6 +107,29 @@ private fun AuditorScreen(vm: AuditorViewModel) {
                         copy(context, digests.joinToString(","))
                         toast(context, "Digest copied")
                     }) { Text("Copy digest") }
+                }
+            }
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Huawei SysIntegrity (HMS)", style = MaterialTheme.typography.titleSmall)
+                    Text("HMS Core: ${yesNo(vm.huawei.isHmsCoreAvailable())}")
+                    Text("AppGallery Connect App ID: ${vm.huawei.appId.ifBlank { "not configured" }}")
+                    Text(
+                        "When available, the SysIntegrity result is sent with each step: the backend uses it " +
+                            "only if the key attestation is rejected and HUAWEI_SYSINTEGRITY is enabled.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    HuaweiSysIntegrity.Api.entries.forEach { api ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = vm.sysIntegrityApi == api,
+                                onClick = { vm.updateSysIntegrityApi(api) },
+                                enabled = !vm.busy,
+                            )
+                            Text(api.label, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
             }
 

@@ -80,6 +80,7 @@ Environment variables:
 | `ANDROID_PACKAGE_NAMES` | no | Comma separated package names, `it.capptests.itwattauditor` by default. |
 | `CHALLENGE_TTL_SECONDS` | no | Validity of the challenges, 300 by default. |
 | `GRAPHENEOS_ALLOWED_SIGNERS` | no | Overrides the pinned GrapheneOS `allowed_signers`, after a key rotation. |
+| `HUAWEI_SYSINTEGRITY` | no | `true` to accept the Huawei devices without GMS through the HMS SysIntegrity result, see [Huawei devices without GMS](#huawei-devices-without-gms). Disabled by default. |
 
 ### Deployment on Vercel
 
@@ -118,11 +119,45 @@ The **Android app** GitHub workflow builds the APK as an artifact: with the `ITW
 
 -----------
 
+## Huawei devices without GMS
+
+The Huawei devices without Google Mobile Services sold in Italy (EMUI 15, AOSP 12 base) can't provide a trustworthy Android key attestation: without the Google attestation keys, the keystore (Keymaster 3, no app attest keys) signs the chains with the **AOSP software attestation key**, whose private key is public. The backend rejects them with an explicit "Software attestation" error. HUKS key attestation, rooted at the Huawei device attestation root, is only available to HarmonyOS NEXT apps.
+
+As an option (`HUAWEI_SYSINTEGRITY=true`), these devices can use the **HMS Safety Detect SysIntegrity** check instead, the counterpart of Play Integrity on HMS. HMS Core evaluates the system integrity on the device, with the TEE where supported, and returns a JWS signed by the Huawei SysIntegrity service. The app uses either of the two APIs of the SDK (selectable in the app):
+
+- `sysIntegrity(SysIntegrityRequest)` with the `PS256` algorithm;
+- `sysIntegrity(nonce, appId)`, signed with `RS256`.
+
+The backend verifies the result as in the [HMS Core server sample](https://github.com/HMS-Core/hms-safetydetect-demo-android/tree/master/SafetyDetect-SysIntegrity-Sample/SafetyDetect-SysIntegrity-Server-Sample):
+
+1. the `x5c` chain is rooted at the pinned **HUAWEI CBG Root CA** (SHA-256 `3A:A8:1A:D7:…:9D:6B:8D:A0`);
+2. the signing certificate is issued to `sysintegrity.platform.hicloud.com`;
+3. the `RS256` / `PS256` signature is valid;
+4. the payload has the expected `nonce`, `apkPackageName` (`ANDROID_PACKAGE_NAMES`) and `apkCertificateDigestSha256` (`ANDROID_SIGNATURE_DIGESTS`), a `timestampMs` of at most 10 minutes and `basicIntegrity: true`.
+
+| Step | SysIntegrity nonce | Accepted when |
+| --- | --- | --- |
+| Registration | SHA-256(challenge ‖ SubjectPublicKeyInfo of the hardware key) | the key attestation is rejected and the result is valid: the registration token pins the hardware key and the `huawei_sysintegrity` method |
+| Assertion | SHA-256(client data) | the client data is signed by the registered hardware key and the result is valid |
+
+Please note the limits of this path, the same of Play Integrity: the result is a verdict of a remote service, it is **not bound to the keys** of the app, so it doesn't prove that the hardware key is stored in secure hardware (`hardwareKeyProven: false` in the response), and there is no attest key pinning the device. Trusting it is a policy choice, hence it is disabled by default.
+
+Setup:
+
+1. In AppGallery Connect, add the SHA-256 fingerprint of the app signing certificate to the app `it.capptests.itwattauditor` and enable Safety Detect.
+2. Build the app with the App ID: put `agconnect-services.json` in `android/app/` (it is ignored by git, as it contains the client credentials), or pass `-Pitwattauditor.huaweiAppId=<App ID>` or `ITWATT_HUAWEI_APP_ID`. The GitHub workflow reads the `ITWATT_HUAWEI_APP_ID` repository variable.
+3. Set `HUAWEI_SYSINTEGRITY=true` on the backend.
+
+The app sends the SysIntegrity result with each step when HMS Core is available, and exports it in the ZIP (`sysintegrity.jws` and the decoded `sysintegrity.json`).
+
+-----------
+
 ## Limits
 
 - The challenges are stateless (_HMAC with expiry_): without a storage they can't be consumed, so they can be replayed until they expire. The Wallet Provider consumes them.
 - The registration token replaces the wallet instance stored by the Wallet Provider: it can't be revoked before the secret changes.
 - The app uses its own package name and signing certificate, not the IO app ones.
+- The HUAWEI CBG Root CA is pinned without revocation checks of the SysIntegrity certificates.
 
 ----------
 

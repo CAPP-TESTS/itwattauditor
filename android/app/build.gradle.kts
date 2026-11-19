@@ -8,6 +8,19 @@ plugins {
 // certificate digest configured on the backend (ANDROID_SIGNATURE_DIGESTS) stays the same across builds
 val releaseKeystore = System.getenv("ITWATT_KEYSTORE_FILE")?.let { file(it) }?.takeIf { it.exists() }
 
+// Huawei AppGallery Connect App ID, required by the HMS Safety Detect SysIntegrity API: from the
+// itwattauditor.huaweiAppId property, the ITWATT_HUAWEI_APP_ID variable or app/agconnect-services.json
+// (client.app_id), which is not committed. Without it the SysIntegrity check is disabled.
+val huaweiAppId: String = (project.findProperty("itwattauditor.huaweiAppId") as String?)
+    ?.takeIf { it.isNotBlank() }
+    ?: System.getenv("ITWATT_HUAWEI_APP_ID")?.takeIf { it.isNotBlank() }
+    ?: file("agconnect-services.json").takeIf { it.exists() }?.let { json ->
+        @Suppress("UNCHECKED_CAST")
+        val config = groovy.json.JsonSlurper().parse(json) as Map<String, Any?>
+        (config["client"] as Map<String, Any?>?)?.get("app_id")?.toString()
+    }
+    ?: ""
+
 android {
     namespace = "it.capptests.itwattauditor"
     compileSdk = 36
@@ -25,6 +38,8 @@ android {
             "DEFAULT_SERVER_URL",
             "\"${project.findProperty("itwattauditor.serverUrl") ?: ""}\""
         )
+        buildConfigField("String", "HUAWEI_APP_ID", "\"$huaweiAppId\"")
+        manifestPlaceholders["huaweiAppId"] = huaweiAppId
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -76,5 +91,6 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.hms.safetydetect)
     testImplementation(libs.junit)
 }
