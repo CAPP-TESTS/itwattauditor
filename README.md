@@ -137,7 +137,7 @@ The backend verifies the result as in the [HMS Core server sample](https://githu
 
 | Step | SysIntegrity nonce | Accepted when |
 | --- | --- | --- |
-| Registration | SHA-256(challenge ‖ SubjectPublicKeyInfo of the hardware key) | the key attestation is rejected and the result is valid: the registration token pins the hardware key and the `huawei_sysintegrity` method |
+| Registration | SHA-256(challenge ‖ SubjectPublicKeyInfo of the hardware key) | the key attestation can't provide hardware evidence (AOSP software attestation or chain not rooted at Google) and the result is valid: the registration token pins the hardware key and the `huawei_sysintegrity` method. A Google-rooted chain rejected by the policy (e.g. unlocked bootloader) is never overridden |
 | Assertion | SHA-256(client data) | the client data is signed by the registered hardware key and the result is valid |
 
 Please note the limits of this path, the same of Play Integrity: the result is a verdict of a remote service, it is **not bound to the keys** of the app, so it doesn't prove that the hardware key is stored in secure hardware (`hardwareKeyProven: false` in the response), and there is no attest key pinning the device. Trusting it is a policy choice, hence it is disabled by default.

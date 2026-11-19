@@ -180,13 +180,35 @@ const SOFTWARE_ROOT_SUBJECT = /CN=Android Keystore Software Attestation (Root|In
  * Rejects the chains signed with the AOSP software attestation key, with an explicit reason.
  * @throws {AttestationPolicyError} - If the chain is a software attestation.
  */
-const rejectSoftwareAttestation = (x509Chain: X509Certificate[]) => {
-  const isSoftware = x509Chain.some(
+const isSoftwareAttestation = (x509Chain: X509Certificate[]) =>
+  x509Chain.some(
     (c) =>
       SOFTWARE_ROOT_SUBJECT.test(c.subject) ||
       toSpki(c.publicKey).toString('base64') === AOSP_SOFTWARE_ROOT_EC_KEY
   );
-  if (isSoftware) {
+
+/**
+ * Checks whether a chain can provide hardware evidence: it is not a software attestation and its last
+ * certificate is issued by a trusted root. A chain with hardware evidence which is rejected by the policy
+ * (e.g. unlocked bootloader) must not be overridden by a weaker proof, such as a remote verdict.
+ * @param x509Chain - The certificate chain.
+ * @param rootPublicKeys - The trusted roots, the Google Hardware Attestation Root CAs by default.
+ * @returns true if the chain is rooted at a trusted hardware attestation root.
+ */
+export const hasHardwareRoot = (
+  x509Chain: X509Certificate[],
+  rootPublicKeys: crypto.KeyObject[] = getGoogleRootPublicKeys()
+) => {
+  const last = x509Chain[x509Chain.length - 1];
+  return (
+    last !== undefined &&
+    !isSoftwareAttestation(x509Chain) &&
+    rootPublicKeys.some((key) => isSignedBy(last, key))
+  );
+};
+
+const rejectSoftwareAttestation = (x509Chain: X509Certificate[]) => {
+  if (isSoftwareAttestation(x509Chain)) {
     throw new AttestationPolicyError(
       'Software attestation: the chain is signed with the public AOSP software attestation key, ' +
         'it provides no hardware guarantee (e.g. a device without the Google attestation keys)'

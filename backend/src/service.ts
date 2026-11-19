@@ -14,6 +14,7 @@ import {
   verifyRegistration,
 } from './tokens';
 import {
+  hasHardwareRoot,
   parseCertificateChain,
   spkiBase64,
   verifyAssertion,
@@ -124,7 +125,13 @@ export const register = async (
     };
   } catch (e) {
     const keyAttestationError = errorMessage(e);
-    if (config.huaweiSysIntegrity && sysIntegrity !== undefined) {
+    // SysIntegrity replaces only a key attestation which can't provide hardware evidence (e.g. the AOSP
+    // software attestation of the Huawei devices without GMS), never a hardware one rejected by the policy
+    if (
+      config.huaweiSysIntegrity &&
+      sysIntegrity !== undefined &&
+      !hasHardwareRoot(chain, options.rootPublicKeys)
+    ) {
       return registerWithSysIntegrity(
         challenge as string,
         chain,

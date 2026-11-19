@@ -205,12 +205,44 @@ describe('verifySysIntegrity', () => {
   });
 });
 
+/**
+ * Creates a root like the AOSP software attestation root, which signs the key attestations of the
+ * Huawei devices without GMS.
+ */
+const createSoftwareRoot = async (): Promise<TestRoot> => {
+  const keys = (await crypto.webcrypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify']
+  )) as crypto.webcrypto.CryptoKeyPair;
+  const certificate = await x509.X509CertificateGenerator.createSelfSigned({
+    serialNumber: '01',
+    name: 'CN=Android Keystore Software Attestation Root',
+    notBefore: new Date('2016-01-01T00:00:00Z'),
+    notAfter: new Date('2036-01-01T00:00:00Z'),
+    keys,
+    signingAlgorithm: { name: 'ECDSA', hash: 'SHA-256' },
+  });
+  return {
+    keys,
+    certificate,
+    publicKey: crypto.createPublicKey({
+      key: Buffer.from(certificate.publicKey.rawData),
+      format: 'der',
+      type: 'spki',
+    }),
+  };
+};
+
 describe('Huawei registration and assertion', () => {
+  // The trusted hardware root (Google) and the AOSP software root of the Huawei devices
   let root: TestRoot;
+  let softwareRoot: TestRoot;
   let pki: HuaweiPki;
 
   before(async () => {
     root = await createTestRoot();
+    softwareRoot = await createSoftwareRoot();
     pki = await createHuaweiPki();
   });
 
@@ -227,16 +259,18 @@ describe('Huawei registration and assertion', () => {
   type Body = Record<string, unknown>;
 
   /**
-   * Registers a device whose key attestation is rejected (unlocked bootloader, as reported by the
-   * Huawei software attestation), with a SysIntegrity result bound to the challenge and the key.
+   * Registers a device whose key attestation is signed by the AOSP software root (unlocked and
+   * unverified, as reported by the Huawei devices), with a SysIntegrity result bound to the challenge
+   * and the key. With the hardware root, the chain is a Google one rejected by the policy.
    */
   const registerHuawei = async (
     serviceDeps = deps(),
-    nonce?: (challenge: string, key: crypto.KeyObject) => Buffer
+    nonce?: (challenge: string, key: crypto.KeyObject) => Buffer,
+    attestationRoot: TestRoot = softwareRoot
   ) => {
     const { challenge } = (await getChallenge(serviceDeps)).body as { challenge: string };
     const attestation = await createAttestation(
-      root,
+      attestationRoot,
       stockParams({ challenge, deviceLocked: false, verifiedBootState: VerifiedBootState.unverified }),
       { attestKey: null }
     );
@@ -273,7 +307,7 @@ describe('Huawei registration and assertion', () => {
     assert.equal(response.status, 200, JSON.stringify(response.body));
     assert.equal(response.body.method, 'huawei_sysintegrity');
     assert.equal(response.body.hardwareKeyProven, false);
-    assert.match(response.body.keyAttestationError as string, /Bootloader is unlocked/);
+    assert.match(response.body.keyAttestationError as string, /Software attestation/);
 
     const body = await assertion(attestation.privateKey, response.body.registration as string);
     const result = await assertEndpoint(body, deps());
@@ -284,7 +318,13 @@ describe('Huawei registration and assertion', () => {
   it('does not accept SysIntegrity unless enabled', async () => {
     const { response } = await registerHuawei(deps({}));
     assert.equal(response.status, 422);
-    assert.match(response.body.error as string, /Bootloader is unlocked/);
+    assert.match(response.body.error as string, /Software attestation/);
+  });
+
+  it('never overrides a hardware key attestation rejected by the policy', async () => {
+    const { response } = await registerHuawei(deps(), undefined, root);
+    assert.equal(response.status, 422);
+    assert.match(response.body.error as string, /^Bootloader is unlocked$/);
   });
 
   it('binds the registration result to the registered key', async () => {
